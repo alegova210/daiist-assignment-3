@@ -408,12 +408,19 @@ def _bm25(collection_name: str, query: str) -> list[tuple[str, float]]:
     return sorted(scores, key=lambda x: -x[1])
 
 
-def search(query: str, k: int = 5, design: str | None = None) -> list[dict]:
-    """Top-k chunks for a query. `design` is a key of SEARCH_VARIANTS (default: the chosen one)."""
+def search(query: str, k: int = 5, design: str | None = None,
+           exclude_sources: tuple[str, ...] = ()) -> list[dict]:
+    """Top-k chunks for a query. `design` is a key of SEARCH_VARIANTS (default: the chosen one).
+
+    `exclude_sources` hides documents added later (evaluation uses it to keep the retrieval
+    comparison on the original corpus)."""
+    if exclude_sources:
+        wider = search(query, k + 40, design)
+        return [r for r in wider if r["source"] not in exclude_sources][:k]
     collection_name, method = SEARCH_VARIANTS[design or chosen_design()]
     col = collection(collection_name)
     if method == "vector":
-        res = col.query(query_embeddings=[embed_query(query)], n_results=k,
+        res = col.query(query_embeddings=[embed_query(query)], n_results=min(k, col.count()),
                         include=["documents", "metadatas", "distances"])
         return [{"text": doc, **meta, "score": round(1 - dist, 4)}
                 for doc, meta, dist in zip(res["documents"][0], res["metadatas"][0], res["distances"][0])]

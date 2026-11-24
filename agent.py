@@ -30,8 +30,10 @@ from pathlib import Path
 from api_key import load_api_key
 
 ROOT = Path(__file__).resolve().parent
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
-FALLBACK_MODELS = ["gemini-3.7-flash", "gemini-3.5-flash"]   # used when MODEL is overloaded (503)
+MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")   # free tier: 500 requests/day, 15/min
+FALLBACK_MODELS = ["gemini-3.1-flash-lite"]   # used when MODEL is overloaded (503)
+MODEL_TIMEOUT = 60        # seconds per model call before retry / fallback
+QUESTION_TIMEOUT = 300    # seconds per question, then give up (evaluate.py retries it on the next run)
 MAX_SEARCHES = 4
 MAX_MODEL_CALLS = 8
 REFUSAL = "El corpus no cubre esta pregunta."
@@ -51,10 +53,38 @@ def _text(content) -> str:
     return str(content)
 
 
+BRACKET_RE = re.compile(r"\[([^\[\]]+)\]")
+ONE_CITATION_RE = re.compile(r"^\s*([A-Z][A-Z0-9_]+),\s*([^()]+?)\s*(?:\(([^)]*)\))?\s*$")
+
+
+LOC_START_RE = re.compile(r",\s*(?=(?:Artículo|Disposición|Anexo)\b)")
+ARTICLE_SUB_RE = re.compile(r"^(Artículo\s+\d+)\.\d[\d.]*$")
+
+
+def find_citations(answer: str) -> list[tuple[str, str]]:
+    """All (source, location) citations in an answer.
+
+    Accepts the requested form [A, Artículo 1 (1.2)] and the variants the model writes in
+    practice: [A, Artículo 1; B, Artículo 2], [A, Artículo 5, Artículo 7] and [A, Artículo 29.5]
+    (sub-article glued to the article number, normalised to "Artículo 29")."""
+    out = []
+    for inside in BRACKET_RE.findall(answer):
+        for part in inside.split(";"):
+            m = ONE_CITATION_RE.match(part)
+            if not m:
+                continue
+            source = m.group(1)
+            for loc in LOC_START_RE.split(m.group(2)):
+                loc = re.sub(r"\s*\(.*$", "", loc).strip()
+                sub = ARTICLE_SUB_RE.match(loc)
+                out.append((source, sub.group(1) if sub else loc))
+    return out
+
+
 def check_citations(answer: str, retrieved: set[tuple[str, str]]) -> tuple[list, list]:
     valid, invalid = [], []
-    for source, location, _sub in CITATION_RE.findall(answer):
-        (valid if (source, location.strip()) in retrieved else invalid).append(f"{source}, {location.strip()}")
+    for source, location in find_citations(answer):
+        (valid if (source, location) in retrieved else invalid).append(f"{source}, {location}")
     return valid, invalid
 
 
@@ -107,12 +137,12 @@ async def _ask(question: str, interactive: bool) -> dict:
                                                     args_schema=getattr(tool, "input_schema", None) or getattr(tool, "inputSchema"))
 
             tools = [wrap(t) for t in mcp_tools]
-            model = ChatGoogleGenerativeAI(model=MODEL, temperature=0, max_retries=3)
+            model = ChatGoogleGenerativeAI(model=MODEL, temperature=0, max_retries=2, timeout=MODEL_TIMEOUT)
             middleware = []
             try:
                 from langchain.agents.middleware import ModelFallbackMiddleware
                 middleware.append(ModelFallbackMiddleware(
-                    *[ChatGoogleGenerativeAI(model=m, temperature=0, max_retries=2) for m in FALLBACK_MODELS]))
+                    *[ChatGoogleGenerativeAI(model=m, temperature=0, max_retries=1, timeout=MODEL_TIMEOUT) for m in FALLBACK_MODELS]))
             except ImportError:
                 pass
             try:
@@ -131,6 +161,7 @@ async def _ask(question: str, interactive: bool) -> dict:
         tokens_in += usage.get("input_tokens", 0)
         tokens_out += usage.get("output_tokens", 0)
 
+    raw_answer = answer
     refused = answer.startswith(REFUSAL)
     valid, invalid = check_citations(answer, retrieved)
     guardrail = None
@@ -140,7 +171,7 @@ async def _ask(question: str, interactive: bool) -> dict:
                   f"así que no la muestro.)")
         refused = True
     return {
-        "question": question, "answer": answer, "refused": refused,
+        "question": question, "answer": answer, "raw_answer": raw_answer, "refused": refused,
         "valid_citations": valid, "invalid_citations": invalid, "guardrail": guardrail,
         "searches": searches, "trace": trace, "passages": "\n\n".join(passages),
         "tokens_in": tokens_in, "tokens_out": tokens_out,
@@ -149,7 +180,7 @@ async def _ask(question: str, interactive: bool) -> dict:
 
 
 def ask(question: str, interactive: bool = False) -> dict:
-    return asyncio.run(_ask(question, interactive))
+    return asyncio.run(asyncio.wait_for(_ask(question, interactive), QUESTION_TIMEOUT))
 
 
 def main() -> None:
