@@ -1,7 +1,7 @@
 # Assignment 3 Report
 
 - **Name**: Alejandra Gómez Vallejo
-- **Student ID**: _(fill in)_
+- **Student ID**: 19766
 - **Group**: BBADBA 5B
 
 ## Use case
@@ -221,4 +221,4 @@ All 36 questions were run through the agent (`eval/answers.jsonl`).
 
 ## AI use
 
-I used Claude (Anthropic) as a coding and writing assistant throughout. It helped me compare possible topics and licences (I chose anti-doping), find the BOE sources, and write the code (`corpus_sources.py`, `index.py`, `server.py`, `agent.py`, `evaluate.py`, `AGENTS.md`, the subagent). It also helped me draft the test questions from the articles, which I reviewed, and draft this report. I ran every command myself on my laptop with my own Gemini key. For the human labels, Claude showed me each answer next to the reference and the relevant retrieved text; I decided each grade, and Claude recorded them. I wrote the grading notes in English with its help.
+Claude (Anthropic) wrote the code and helped with the grammar and writing style of the report; it also drafted the test questions and the judge rubric, which I reviewed. I made the decisions: the use case and topic, the corpus, the choice between the chunking designs based on the hit rates, the refusal behaviour, and whether users should rely on the system. I decided every human grade, and I ran the whole pipeline myself.
